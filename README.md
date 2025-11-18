@@ -85,8 +85,10 @@ WEBHOOK_PORT=5000
 Polling is simpler and doesn't require a public domain. The bot continuously asks Telegram for new messages.
 
 ```bash
-python polling_bot.py
+python polling_bot.py     # hoặc lệnh `py polling_bot.py` trên Windows
 ```
+
+> Mẹo nhanh trên Windows: double-click `run_bot.bat` (hoặc chạy `run_bot.bat` trong CMD) để bot khởi động polling mode tự động và hiển thị log trong console.
 
 **Advantages:**
 - No public domain needed

@@ -70,6 +70,7 @@ WEBHOOK_PORT=5000
 2. Send `/newbot` command
 3. Follow the prompts and copy your bot token
 4. Send `/setprivacy` and choose "Disable" to let bot read group messages
+5. Sau khi disable privacy, thêm bot vào group rồi gửi `/start` trong chat riêng để cập nhật quyền (nếu cần)
 
 #### Groq API Key
 1. Visit https://console.groq.com
@@ -118,6 +119,7 @@ curl https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=https://yourdomain.
 **Disadvantages:**
 - Requires public domain with HTTPS
 - More complex setup
+- Phải đảm bảo bot đã được `@BotFather` set privacy "Disable" thì Telegram mới gửi toàn bộ tin nhắn nhóm đến webhook/polling.
 
 ## Bot Commands
 

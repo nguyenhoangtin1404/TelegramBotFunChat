@@ -12,6 +12,7 @@ A fun Telegram group bot that auto-mentions users and replies with AI-generated 
 ✅ Graceful error handling  
 ✅ Tùy chỉnh mood trò chuyện theo từng nhóm  
 ✅ Trả lời nhanh câu hỏi ngày/giờ hiện tại  
+✅ Có thể gửi kèm lịch sử vài tin nhắn gần nhất để Groq nắm ngữ cảnh  
 ✅ Two deployment options: Webhook or Polling  
 
 ## Requirements
@@ -57,6 +58,7 @@ GROQ_API_KEY=your_groq_api_key_here
 GROQ_MODEL=llama-3.3-70b-versatile
 GROQ_API_URL=https://api.groq.com/openai/v1/chat/completions
 BOT_USERNAME=your_bot_username
+CHAT_HISTORY_LENGTH=4
 WEBHOOK_HOST=0.0.0.0
 WEBHOOK_PORT=5000
 ```
@@ -123,6 +125,7 @@ curl https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=https://yourdomain.
 - `/alive`: báo uptime bot và trạng thái Groq.
 - `/mute <phút>`: khiến bot im lặng tạm thời trong nhóm.
 - `/mood <tên>`: đổi mood trò chuyện (`vui`, `lem_linh`, `cau_gat`). Nếu không truyền tham số sẽ trả về mood hiện tại.
+- `/autoreply <all|mention>`: điều khiển chế độ bot trả lời mọi tin nhắn hoặc chỉ khi được nhắc tên.
 - `@BotName đây?`: ping trực tiếp để bot đáp "Có mặt".
 
 ## Project Structure
@@ -180,6 +183,10 @@ Current Vietnamese system prompt. Edit in `telegram_bot.py`:
 SYSTEM_PROMPT = "Bạn là bot chat vui vẻ trong group. Trả lời ngắn gọn, vui nhộn, và thân thiện. Không vượt quá 2 câu."
 ```
 
+### Conversation Context
+
+Muốn Groq hiểu mạch hội thoại hơn? Thiết lập `CHAT_HISTORY_LENGTH` trong `.env` (ví dụ `4`) để bot luôn gửi kèm một vài tin nhắn gần nhất (bao gồm cả câu trả lời của bot). Đặt `0` nếu bạn muốn mỗi lần gọi Groq là một câu độc lập và giảm chi phí/tốc độ.
+
 ### Fallback Messages
 
 Edit the list in `telegram_bot.py`:
@@ -187,7 +194,15 @@ Edit the list in `telegram_bot.py`:
 ```python
 FALLBACK_MESSAGES = [
     "Haha nghe vui à nha 😆",
-    # Add your own messages here
+    "Cười chết mệ 😂",
+    "Đó là một trò đùa tuyệt vời!",
+    "Hahahaha, bạn làm tôi cười 🤣",
+    "Quá hài hước rồi!",
+    "Đừng làm tôi cười nữa, bụng đau rồi 😆",
+    "Ơi hay quá, hay quá!",
+    "Bạn thật là một người hài hước 😄",
+    "Mình thích điều đó! 👍",
+    "Hehe, bạn biết cách làm vui lòng người ta 😉",
 ]
 ```
 

@@ -5,8 +5,9 @@ import random
 import logging
 import time
 from datetime import datetime
+import re
 import requests
-from typing import Optional
+from typing import Optional, List, Dict
 from dotenv import load_dotenv
 
 # Configure logging
@@ -24,7 +25,12 @@ GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 BOT_USERNAME = (os.getenv('BOT_USERNAME') or '').lstrip('@')
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 GROQ_API_URL = os.getenv('GROQ_API_URL', "https://api.groq.com/openai/v1/chat/completions")
+try:
+    CHAT_HISTORY_LENGTH = max(0, int(os.getenv('CHAT_HISTORY_LENGTH', '0')))
+except ValueError:
+    CHAT_HISTORY_LENGTH = 0
 BOT_USER_ID = None
+BOT_MENTION_PATTERN = re.compile(rf"@{re.escape(BOT_USERNAME)}", re.IGNORECASE) if BOT_USERNAME else None
 if TELEGRAM_TOKEN and ':' in TELEGRAM_TOKEN:
     try:
         BOT_USER_ID = int(TELEGRAM_TOKEN.split(':', 1)[0])
@@ -37,7 +43,16 @@ FALLBACK_MESSAGES = [
     "Ủa gì zợ? 😂 kể nghe coi",
     "Bot xỉu ngang 🤣",
     "Ghê zợ ông bạn 😜",
-    "Cái này coi bộ căng à nha 😆"
+    "Cái này coi bộ căng à nha 😆",
+    "Cười chết mệ 😂",
+    "Đó là một trò đùa tuyệt vời!",
+    "Hahahaha, bạn làm tôi cười 🤣",
+    "Quá hài hước rồi!",
+    "Đừng làm tôi cười nữa, bụng đau rồi 😆",
+    "Ơi hay quá, hay quá!",
+    "Bạn thật là một người hài hước 😄",
+    "Mình thích điều đó! 👍",
+    "Hehe, bạn biết cách làm vui lòng người ta 😉",
 ]
 
 # System prompt for Groq
@@ -65,13 +80,18 @@ HELP_TEXT = (
     "/mute <phút> - Tạm im lặng trong nhóm.\n"
     "/help - Hiển thị các lệnh điều khiển.\n"
     f"/mood <tên> - Đổi mood bot ({MOOD_OPTIONS_TEXT}).\n"
+    "/autoreply <all|mention> - Bật tắt chế độ trả lời tất cả hay chỉ khi được nhắc.\n"
 )
 if BOT_USERNAME:
-    HELP_TEXT += f"@{BOT_USERNAME} đây? - Gọi bot xác nhận.\n"
+    HELP_TEXT += f"Nhắc @{BOT_USERNAME} để gọi bot xác nhận.\n"
 
 BOT_START_TIME = time.time()
 chat_mute_until: dict[int, float] = {}
 chat_mood: dict[int, str] = {}
+chat_auto_reply_mode: dict[int, str] = {}
+AUTO_REPLY_ALL = "all"
+AUTO_REPLY_MENTION = "mention"
+chat_history: Dict[int, List[Dict[str, str]]] = {}
 
 
 def escape_markdown(text: str) -> str:
@@ -85,7 +105,7 @@ def escape_markdown(text: str) -> str:
     return text
 
 
-def get_groq_response(message_text: str, system_prompt: str) -> Optional[str]:
+def get_groq_response(message_text: str, system_prompt: str, history: Optional[List[Dict[str, str]]] = None) -> Optional[str]:
     """
     Call Groq API to generate a fun response.
     
@@ -102,12 +122,16 @@ def get_groq_response(message_text: str, system_prompt: str) -> Optional[str]:
             "Content-Type": "application/json"
         }
         
+        messages = [
+            {"role": "system", "content": system_prompt}
+        ]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": message_text})
+
         payload = {
             "model": GROQ_MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message_text}
-            ]
+            "messages": messages
         }
         
         response = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=2)
@@ -156,6 +180,41 @@ def build_system_prompt(chat_id: int) -> str:
     return f"{SYSTEM_PROMPT}\nMood hiện tại: {tone}"
 
 
+def get_auto_reply_mode(chat_id: int) -> str:
+    """Return current auto reply mode for chat."""
+    return chat_auto_reply_mode.get(chat_id, AUTO_REPLY_ALL)
+
+
+def set_auto_reply_mode(chat_id: int, mode: str) -> None:
+    """Save auto reply mode for chat."""
+    chat_auto_reply_mode[chat_id] = mode
+
+
+def append_chat_history_entry(chat_id: int, role: str, content: str) -> None:
+    if CHAT_HISTORY_LENGTH <= 0 or not content:
+        return
+    history = chat_history.setdefault(chat_id, [])
+    history.append({"role": role, "content": content})
+    if len(history) > CHAT_HISTORY_LENGTH:
+        del history[0: len(history) - CHAT_HISTORY_LENGTH]
+
+
+def record_conversation_turn(chat_id: int, user_text: Optional[str], bot_text: Optional[str]) -> None:
+    if CHAT_HISTORY_LENGTH <= 0:
+        return
+    if user_text:
+        append_chat_history_entry(chat_id, "user", user_text)
+    if bot_text:
+        append_chat_history_entry(chat_id, "assistant", bot_text)
+
+
+def get_chat_history_messages(chat_id: int) -> List[Dict[str, str]]:
+    if CHAT_HISTORY_LENGTH <= 0:
+        return []
+    history = chat_history.get(chat_id, [])
+    return history[-CHAT_HISTORY_LENGTH:]
+
+
 def get_local_intent_reply(message_text: str) -> Optional[str]:
     """Return a local deterministic reply for time/date questions."""
     if not message_text:
@@ -188,13 +247,12 @@ def get_local_intent_reply(message_text: str) -> Optional[str]:
     return None
 
 
-def should_reply_to_mention(text: str) -> bool:
-    """Check if the message is a direct ping like '@BotName đây?'"""
-    if not BOT_USERNAME or not text:
-        return False
-    normalized = text.strip().lower()
-    mention_prefix = f"@{BOT_USERNAME.lower()}"
-    return normalized.startswith(mention_prefix) and ("đây" in normalized or "day" in normalized)
+def extract_text_without_mention(text: str) -> tuple[str, bool]:
+    """Remove bot mention from text and report if mention existed."""
+    if not text or not BOT_MENTION_PATTERN:
+        return text.strip(), False
+    cleaned, count = BOT_MENTION_PATTERN.subn(' ', text)
+    return cleaned.strip(), count > 0
 
 
 def is_chat_muted(chat_id: int) -> bool:
@@ -259,6 +317,17 @@ def handle_command(message_text: str, chat_id: int) -> Optional[str]:
             return f"Mood không hợp lệ. Chọn một trong: {MOOD_OPTIONS_TEXT}."
         set_chat_mood(chat_id, mood_key)
         return f"Đã chuyển mood sang {mood_key}. {MOOD_TONES[mood_key]}"
+
+    if command == '/autoreply':
+        if len(parts) == 1:
+            return f"Auto-reply hiện tại: {get_auto_reply_mode(chat_id)} (all/mention)."
+        mode = parts[1].lower()
+        if mode not in (AUTO_REPLY_ALL, AUTO_REPLY_MENTION):
+            return "Chỉ chấp nhận 'all' hoặc 'mention'. Ví dụ: /autoreply mention"
+        set_auto_reply_mode(chat_id, mode)
+        if mode == AUTO_REPLY_ALL:
+            return "Bot sẽ trả lời tất cả tin nhắn văn bản."
+        return "Bot sẽ chỉ trả lời khi được nhắc tên hoặc lệnh."
 
     return None
 
@@ -335,7 +404,26 @@ def process_message(update: dict) -> None:
         user_id = from_user.get('id')
         # Use username if available, fallback to first_name
         username = from_user.get('username') or from_user.get('first_name') or 'User'
-        message_text = message.get('text', '').strip()
+        original_text = message.get('text', '')
+        message_text = original_text.strip()
+        cleaned_text, has_mention = extract_text_without_mention(original_text)
+        auto_reply_mode = get_auto_reply_mode(chat_id)
+        if has_mention:
+            if not cleaned_text:
+                reply_text = "Có mặt! Bạn cần gì nè?"
+                safe_username = escape_markdown(username)
+                safe_reply = escape_markdown(reply_text)
+                final_message = f"[{safe_username}](tg://user?id={user_id}) {safe_reply}"
+                send_telegram_message(chat_id, final_message, message_id)
+                user_entry = original_text.strip() or (f"@{BOT_USERNAME}" if BOT_USERNAME else original_text.strip())
+                record_conversation_turn(chat_id, user_entry, reply_text)
+                return
+            message_text = cleaned_text
+        elif auto_reply_mode == AUTO_REPLY_MENTION:
+            # Only respond to commands when in mention-only mode
+            if not message_text.startswith('/'):
+                logger.info(f"Chat {chat_id} ở chế độ mention, bỏ qua tin nhắn không mention")
+                return
         reply_to = message.get('reply_to_message') or {}
         reply_to_user = reply_to.get('from', {}) if reply_to else {}
         is_reply_to_bot = bool(BOT_USER_ID and reply_to_user.get('id') == BOT_USER_ID)
@@ -345,15 +433,16 @@ def process_message(update: dict) -> None:
             logger.warning(f"Missing required fields - chat_id: {chat_id}, message_id: {message_id}, user_id: {user_id}, text: {bool(message_text)}")
             return
         
-        logger.info(f"Processing message from {username} (ID: {user_id}): {message_text[:50]}")
+        logger.info(f"Processing message from {username} (ID: {user_id}): {original_text[:50]}")
 
-        # Quick mention ping or reply to bot, bypass Groq
-        if should_reply_to_mention(message_text) or is_reply_to_bot:
+        # Quick reply when user replies directly to bot message
+        if is_reply_to_bot and not original_text.strip():
             reply_text = "Có mặt! Bạn cần gì nè?"
             safe_username = escape_markdown(username)
             safe_reply = escape_markdown(reply_text)
             final_message = f"[{safe_username}](tg://user?id={user_id}) {safe_reply}"
             send_telegram_message(chat_id, final_message, message_id)
+            record_conversation_turn(chat_id, original_text.strip(), reply_text)
             return
 
         # Slash commands
@@ -363,6 +452,7 @@ def process_message(update: dict) -> None:
             safe_reply = escape_markdown(command_reply)
             final_message = f"[{safe_username}](tg://user?id={user_id}) {safe_reply}"
             send_telegram_message(chat_id, final_message, message_id)
+            record_conversation_turn(chat_id, message_text, command_reply)
             return
 
         # Respect mute state
@@ -377,11 +467,13 @@ def process_message(update: dict) -> None:
             safe_reply = escape_markdown(local_reply)
             final_message = f"[{safe_username}](tg://user?id={user_id}) {safe_reply}"
             send_telegram_message(chat_id, final_message, message_id)
+            record_conversation_turn(chat_id, message_text, local_reply)
             return
 
         # Try to get AI response with mood-aware prompt, fallback if it fails
         system_prompt = build_system_prompt(chat_id)
-        ai_response = get_groq_response(message_text, system_prompt)
+        history_messages = get_chat_history_messages(chat_id)
+        ai_response = get_groq_response(message_text, system_prompt, history_messages)
         reply_text = ai_response if ai_response else get_fallback_message()
 
         # Build final message with mention and escape Markdown characters in name
@@ -391,6 +483,7 @@ def process_message(update: dict) -> None:
 
         # Send reply
         send_telegram_message(chat_id, final_message, message_id)
+        record_conversation_turn(chat_id, message_text, reply_text)
         
     except Exception as e:
         logger.error(f"Error processing message: {e}")
